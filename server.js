@@ -31,6 +31,14 @@ Rules:
 - If user says they ate food, estimate calories + protein and include logMeal.
 - If user sets calorie/protein goals, include setNutritionGoal.
 - If user asks to add a task, include addTask.
+
+Location rules:
+- If location is "campus", prioritize school tasks.
+- If location is "work", prioritize job tasks.
+- If location is "home", prioritize personal and health tasks.
+- If location is "out", keep suggestions minimal.
+
+- Otherwise actions = [].
 - Otherwise actions = [].
 STATE: ${JSON.stringify(state || {})}
 USER: ${userMessage || ""}
