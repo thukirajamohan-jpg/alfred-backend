@@ -8,74 +8,63 @@ const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 app.get("/health", (_, res) => res.json({ ok: true }));
 
-const schema = {
-  name: "alfred_response",
-  schema: {
-    type: "object",
-    additionalProperties: false,
-    properties: {
-      reply: { type: "string" },
-      actions: {
-        type: "array",
-        items: {
-          type: "object",
-          additionalProperties: false,
-          properties: {
-            type: { type: "string" },
-            payload: {
-              type: "object",
-              additionalProperties: { type: "string" }
-            }
-          },
-          required: ["type", "payload"]
-        }
-      }
-    },
-    required: ["reply", "actions"]
-  }
-};
-
 app.post("/chat", async (req, res) => {
-  try {
-    const { userMessage, state } = req.body || {};
+  const { userMessage, state } = req.body || {};
 
+  try {
     const system = `
 You are Alfred, a personal assistant.
-You MUST return valid JSON matching the schema.
-No extra text.
+Reply with JSON ONLY in this exact format:
+{
+  "reply": "string",
+  "actions": [
+    { "type": "logMeal", "payload": { "calories": "700", "protein": "35" } }
+  ]
+}
 
-Actions supported:
+Actions allowed:
 - logMeal payload: { calories: "number", protein: "number" }
 - setNutritionGoal payload: { calories: "number", protein: "number" }
-- setBedTime payload: { time: "HH:MM" }
-- setLocationContext payload: { value: "home" | "campus" | "work" | "out" }
-- setWorkingToday payload: { value: "true" | "false" }
 - addTask payload: { category: "string", text: "string" }
 
 Rules:
-- If the user says they ate something, estimate calories + protein and include logMeal.
-- If user sets goals (calories/protein), include setNutritionGoal.
-- If user says bedtime, include setBedTime.
-- If user says where they are, include setLocationContext.
-- Keep reply short, slightly sarcastic, not mean.
+- If user says they ate food, estimate calories + protein and include logMeal.
+- If user sets calorie/protein goals, include setNutritionGoal.
+- If user asks to add a task, include addTask.
+- Otherwise actions = [].
+STATE: ${JSON.stringify(state || {})}
+USER: ${userMessage || ""}
 `;
 
-    const response = await client.responses.create({
-      model: "gpt-5.1-chat-latest",
-      input: [
-        { role: "system", content: system },
-        {
-          role: "user",
-          content: `STATE: ${JSON.stringify(state || {})}\nUSER: ${userMessage || ""}`
-        }
-      ],
-      text: { format: { type: "json_schema", json_schema: schema } }
+    const completion = await client.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [{ role: "user", content: system }],
+      temperature: 0.4
     });
 
-    res.json(JSON.parse(response.output_text));
+    const text = completion.choices?.[0]?.message?.content ?? "";
+
+    // Parse first JSON object in the response
+    const start = text.indexOf("{");
+    const end = text.lastIndexOf("}");
+    const candidate = start >= 0 && end >= 0 ? text.slice(start, end + 1) : text;
+
+    let out;
+    try {
+      out = JSON.parse(candidate);
+    } catch {
+      out = { reply: "I got a weird response. Try again.", actions: [] };
+    }
+
+    // Always return the shape your iOS app expects
+    res.status(200).json({
+      reply: String(out.reply ?? "Okay."),
+      actions: Array.isArray(out.actions) ? out.actions : []
+    });
   } catch (e) {
     console.error(e);
-    res.status(500).json({ reply: "Backend error. Try again.", actions: [] });
+    // IMPORTANT: still return 200 so the iOS app doesn't show "can't reach server"
+    res.status(200).json({ reply: "Backend hiccup. Try again.", actions: [] });
   }
 });
 
