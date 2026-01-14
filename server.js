@@ -8,43 +8,74 @@ const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 app.get("/health", (_, res) => res.json({ ok: true }));
 
+const schema = {
+  name: "alfred_response",
+  schema: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      reply: { type: "string" },
+      actions: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            type: { type: "string" },
+            payload: {
+              type: "object",
+              additionalProperties: { type: "string" }
+            }
+          },
+          required: ["type", "payload"]
+        }
+      }
+    },
+    required: ["reply", "actions"]
+  }
+};
+
 app.post("/chat", async (req, res) => {
   try {
     const { userMessage, state } = req.body || {};
 
-    const prompt = `
+    const system = `
 You are Alfred, a personal assistant.
-Return JSON ONLY in this format:
-{
-  "reply": "string",
-  "actions": [
-    { "type": "logMeal", "payload": { "calories": "700", "protein": "35" } }
-  ]
-}
+You MUST return valid JSON matching the schema.
+No extra text.
+
+Actions supported:
+- logMeal payload: { calories: "number", protein: "number" }
+- setNutritionGoal payload: { calories: "number", protein: "number" }
+- setBedTime payload: { time: "HH:MM" }
+- setLocationContext payload: { value: "home" | "campus" | "work" | "out" }
+- setWorkingToday payload: { value: "true" | "false" }
+- addTask payload: { category: "string", text: "string" }
 
 Rules:
-- If user talks about food they ate, estimate calories + protein and include a logMeal action.
-- If user sets goals like "set calories to 3000 protein 160", return setNutritionGoal.
-- Otherwise, reply normally with actions = [].
-STATE: ${JSON.stringify(state || {})}
-USER: ${userMessage || ""}
+- If the user says they ate something, estimate calories + protein and include logMeal.
+- If user sets goals (calories/protein), include setNutritionGoal.
+- If user says bedtime, include setBedTime.
+- If user says where they are, include setLocationContext.
+- Keep reply short, slightly sarcastic, not mean.
 `;
 
-    const completion = await client.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: [{ role: "user", content: prompt }]
+    const response = await client.responses.create({
+      model: "gpt-5.1-chat-latest",
+      input: [
+        { role: "system", content: system },
+        {
+          role: "user",
+          content: `STATE: ${JSON.stringify(state || {})}\nUSER: ${userMessage || ""}`
+        }
+      ],
+      text: { format: { type: "json_schema", json_schema: schema } }
     });
 
-    const text = completion.choices?.[0]?.message?.content || "";
-    // If model returns extra text, try to parse the first JSON block:
-    const jsonStart = text.indexOf("{");
-    const jsonEnd = text.lastIndexOf("}");
-    const sliced = (jsonStart >= 0 && jsonEnd >= 0) ? text.slice(jsonStart, jsonEnd + 1) : text;
-
-    res.json(JSON.parse(sliced));
+    res.json(JSON.parse(response.output_text));
   } catch (e) {
     console.error(e);
-    res.status(500).json({ reply: "Server error", actions: [] });
+    res.status(500).json({ reply: "Backend error. Try again.", actions: [] });
   }
 });
 
